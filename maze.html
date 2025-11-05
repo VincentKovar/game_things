@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Maze Runner</title>
+    <!-- Load Tailwind CSS for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the game's aesthetic and responsiveness */
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+
+        :root {
+            --bg-dark: #1f2937; /* Gray-800 */
+            --wall-color: #374151; /* Gray-700 */
+            --path-color: #0d121c; /* Darker than bg-dark */
+            --player-color: #10b981; /* Emerald-500 */
+            --start-color: #6ee7b7; /* Emerald-300 */
+            --end-color: #f87171; /* Red-400 */
+            --ui-text: #f9fafb; /* Gray-50 */
+        }
+
+        body {
+            font-family: 'Orbitron', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--ui-text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 1rem;
+            margin: 0;
+            overflow-x: hidden;
+        }
+
+        .game-container {
+            width: 100%;
+            max-width: 500px; /* Max size for the game */
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+            border-radius: 12px;
+            background-color: var(--path-color);
+            padding: 1rem;
+        }
+
+        #mazeCanvas {
+            border-radius: 8px;
+            background-color: var(--path-color);
+            border: 4px solid var(--wall-color);
+            touch-action: none; /* Prevent browser scrolling/zooming */
+        }
+
+        .control-button {
+            width: 60px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: var(--wall-color);
+            color: var(--ui-text);
+            border: none;
+            border-radius: 50%;
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            box-shadow: 0 4px #1f2937;
+            margin: 5px;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent; /* Remove tap highlight on mobile */
+        }
+
+        .control-button:active {
+            box-shadow: 0 1px #1f2937;
+            transform: translateY(3px);
+            background-color: #4b5563; /* Gray-600 */
+        }
+
+        /* Responsive D-pad layout */
+        .d-pad-grid {
+            display: grid;
+            grid-template-areas:
+                ". up ."
+                "left center right"
+                ". down .";
+            width: 200px;
+            margin: 1rem auto;
+        }
+        #upBtn { grid-area: up; }
+        #leftBtn { grid-area: left; }
+        #rightBtn { grid-area: right; }
+        #downBtn { grid-area: down; }
+        #center { grid-area: center; visibility: hidden; }
+
+        /* General UI Styling */
+        .info-panel {
+            background-color: var(--wall-color);
+            padding: 1rem;
+            border-radius: 8px;
+        }
+
+        @media (max-width: 600px) {
+            .game-container {
+                padding: 0.5rem;
+            }
+            .control-button {
+                width: 50px;
+                height: 50px;
+                font-size: 1.2rem;
+            }
+            .d-pad-grid {
+                width: 150px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="game-container">
+        <h1 class="text-3xl font-bold text-center mb-4 text-emerald-400 tracking-wider">
+            THE MAZE
+        </h1>
+        <div id="statusMessage" class="info-panel text-center mb-4 text-lg font-semibold h-12 flex items-center justify-center">
+            Find the red exit!
+        </div>
+
+        <canvas id="mazeCanvas" class="w-full aspect-square"></canvas>
+
+        <!-- Control Panel -->
+        <div class="flex flex-col items-center mt-6">
+            <button id="newGameBtn" class="px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-full shadow-lg transition duration-150 ease-in-out">
+                Generate New Maze
+            </button>
+            <div id="mobileControls" class="d-pad-grid mt-6">
+                <button id="upBtn" class="control-button" data-move="up">▲</button>
+                <div id="center"></div>
+                <button id="leftBtn" class="control-button" data-move="left">◀</button>
+                <button id="rightBtn" class="control-button" data-move="right">▶</button>
+                <button id="downBtn" class="control-button" data-move="down">▼</button>
+            </div>
+            <p class="text-xs text-gray-400 mt-4">
+                Use **WASD** or **Arrow Keys** on Desktop.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // Global variables for Firebase access (required by the environment, though not used for this single-player game)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+
+        // --- Game Constants ---
+        const GRID_SIZE = 15; // NxN cells
+        const WALL_THICKNESS = 4;
+        const CELL_PADDING = 2; // Padding inside the cell for the player marker
+
+        // --- Game State ---
+        let canvas, ctx;
+        let cellWidth, cellHeight;
+        let maze = []; // 2D array of cells
+        let player = { x: 0, y: 0 };
+        let gameActive = false;
+        const START_POS = { x: 0, y: 0 };
+        const END_POS = { x: GRID_SIZE - 1, y: GRID_SIZE - 1 };
+
+        // --- Helper Functions ---
+
+        /**
+         * Represents a single cell in the maze grid.
+         * @param {number} x - The cell's column index.
+         * @param {number} y - The cell's row index.
+         */
+        class Cell {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.visited = false;
+                // Walls: [top, right, bottom, left]
+                this.walls = [true, true, true, true];
+            }
+        }
+
+        /**
+         * Gets a random unvisited neighbor of a given cell.
+         * @param {number} x - Current cell x-coordinate.
+         * @param {number} y - Current cell y-coordinate.
+         * @returns {{x: number, y: number, wallIndex: number, oppositeWallIndex: number} | null}
+         */
+        function getUnvisitedNeighbor(x, y) {
+            const neighbors = [];
+            // Directions: [dx, dy, wallIndex, oppositeWallIndex]
+            const directions = [
+                [0, -1, 0, 2], // North (Top wall)
+                [1, 0, 1, 3],  // East (Right wall)
+                [0, 1, 2, 0],  // South (Bottom wall)
+                [-1, 0, 3, 1]  // West (Left wall)
+            ];
+
+            for (const [dx, dy, wallIndex, oppositeWallIndex] of directions) {
+                const nx = x + dx;
+                const ny = y + dy;
+
+                if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
+                    if (!maze[ny][nx].visited) {
+                        neighbors.push({ x: nx, y: ny, wallIndex, oppositeWallIndex });
+                    }
+                }
+            }
+
+            if (neighbors.length > 0) {
+                return neighbors[Math.floor(Math.random() * neighbors.length)];
+            }
+            return null;
+        }
+
+        // --- Maze Generation (Recursive Backtracker) ---
+
+        /**
+         * Initializes the maze grid.
+         */
+        function initializeMaze() {
+            maze = [];
+            for (let y = 0; y < GRID_SIZE; y++) {
+                maze[y] = [];
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    maze[y][x] = new Cell(x, y);
+                }
+            }
+        }
+
+        /**
+         * Recursively generates the maze paths.
+         * @param {number} cx - Current cell x-coordinate.
+         * @param {number} cy - Current cell y-coordinate.
+         */
+        function generateMaze(cx, cy) {
+            maze[cy][cx].visited = true;
+            let neighbor;
+
+            while ((neighbor = getUnvisitedNeighbor(cx, cy))) {
+                const nx = neighbor.x;
+                const ny = neighbor.y;
+
+                // 1. Remove wall from current cell (cx, cy) to neighbor (nx, ny)
+                maze[cy][cx].walls[neighbor.wallIndex] = false;
+
+                // 2. Remove opposite wall from neighbor cell (nx, ny)
+                maze[ny][nx].walls[neighbor.oppositeWallIndex] = false;
+
+                // 3. Recurse
+                generateMaze(nx, ny);
+            }
+        }
+
+        /**
+         * Starts the maze generation process.
+         */
+        function createNewMaze() {
+            initializeMaze();
+            // Start generation from the top-left corner
+            generateMaze(START_POS.x, START_POS.y);
+            // Ensure start and end points are marked
+            maze[START_POS.y][START_POS.x].isStart = true;
+            maze[END_POS.y][END_POS.x].isEnd = true;
+            // Reset player position
+            player.x = START_POS.x;
+            player.y = START_POS.y;
+            gameActive = true;
+            updateStatus("Find the red exit!");
+            drawGame();
+        }
+
+        // --- Drawing Functions ---
+
+        /**
+         * Draws the maze on the canvas.
+         */
+        function drawMaze() {
+            const canvasSize = Math.min(canvas.width, canvas.height);
+            cellWidth = canvasSize / GRID_SIZE;
+            cellHeight = canvasSize / GRID_SIZE;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--path-color');
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--wall-color');
+            ctx.lineWidth = WALL_THICKNESS;
+            ctx.lineCap = 'round';
+
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cell = maze[y][x];
+                    const left = x * cellWidth;
+                    const top = y * cellHeight;
+
+                    // Highlight Start (Green) and End (Red)
+                    if (y === START_POS.y && x === START_POS.x) {
+                        ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--start-color');
+                        ctx.fillRect(left, top, cellWidth, cellHeight);
+                    } else if (y === END_POS.y && x === END_POS.x) {
+                        ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--end-color');
+                        ctx.fillRect(left, top, cellWidth, cellHeight);
+                    }
+
+
+                    // Draw Walls: [top, right, bottom, left]
+                    ctx.beginPath();
+                    // Top wall
+                    if (cell.walls[0]) {
+                        ctx.moveTo(left, top);
+                        ctx.lineTo(left + cellWidth, top);
+                    }
+                    // Right wall
+                    if (cell.walls[1]) {
+                        ctx.moveTo(left + cellWidth, top);
+                        ctx.lineTo(left + cellWidth, top + cellHeight);
+                    }
+                    // Bottom wall
+                    if (cell.walls[2]) {
+                        ctx.moveTo(left + cellWidth, top + cellHeight);
+                        ctx.lineTo(left, top + cellHeight);
+                    }
+                    // Left wall
+                    if (cell.walls[3]) {
+                        ctx.moveTo(left, top + cellHeight);
+                        ctx.lineTo(left, top);
+                    }
+                    ctx.stroke();
+                }
+            }
+        }
+
+        /**
+         * Draws the player marker.
+         */
+        function drawPlayer() {
+            const centerX = player.x * cellWidth + cellWidth / 2;
+            const centerY = player.y * cellHeight + cellHeight / 2;
+            const radius = (cellWidth / 2) - CELL_PADDING;
+
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+            ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--player-color');
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        /**
+         * Main drawing function.
+         */
+        function drawGame() {
+            drawMaze();
+            drawPlayer();
+        }
+
+        // --- Game Logic ---
+
+        /**
+         * Attempts to move the player and checks for win condition.
+         * @param {string} direction - 'up', 'down', 'left', or 'right'.
+         */
+        function movePlayer(direction) {
+            if (!gameActive) return;
+
+            const currentCell = maze[player.y][player.x];
+            let newX = player.x;
+            let newY = player.y;
+            let wallIndex = -1;
+
+            switch (direction) {
+                case 'up':
+                    wallIndex = 0; newY--; break;
+                case 'right':
+                    wallIndex = 1; newX++; break;
+                case 'down':
+                    wallIndex = 2; newY++; break;
+                case 'left':
+                    wallIndex = 3; newX--; break;
+            }
+
+            // Check if there is a wall blocking the move (wallIndex >= 0)
+            if (wallIndex >= 0 && currentCell.walls[wallIndex]) {
+                // Wall collision!
+                updateStatus("Blocked! A wall prevents movement.");
+                return;
+            }
+
+            // Check if the new position is within bounds
+            if (newX >= 0 && newX < GRID_SIZE && newY >= 0 && newY < GRID_SIZE) {
+                player.x = newX;
+                player.y = newY;
+
+                // Redraw the game with the new position
+                drawGame();
+
+                // Check for win condition
+                if (player.x === END_POS.x && player.y === END_POS.y) {
+                    gameActive = false;
+                    updateStatus("YOU ESCAPED THE MAZE! Congratulations!");
+                    // Flash the exit block for celebration
+                    celebrateWin();
+                } else {
+                    updateStatus("Keep running...");
+                }
+            }
+        }
+
+        /**
+         * Updates the status message in the UI.
+         * @param {string} message - The message to display.
+         */
+        function updateStatus(message) {
+            const status = document.getElementById('statusMessage');
+            status.textContent = message;
+        }
+
+        /**
+         * Simple win celebration animation.
+         */
+        function celebrateWin() {
+            const status = document.getElementById('statusMessage');
+            status.classList.add('bg-yellow-500', 'text-gray-900', 'animate-pulse');
+            setTimeout(() => {
+                status.classList.remove('bg-yellow-500', 'text-gray-900', 'animate-pulse');
+            }, 3000);
+        }
+
+        // --- Event Handlers ---
+
+        /**
+         * Handles keyboard input for movement.
+         * @param {KeyboardEvent} event
+         */
+        function handleKeydown(event) {
+            switch (event.key) {
+                case 'ArrowUp':
+                case 'w':
+                case 'W':
+                    movePlayer('up');
+                    break;
+                case 'ArrowDown':
+                case 's':
+                case 'S':
+                    movePlayer('down');
+                    break;
+                case 'ArrowLeft':
+                case 'a':
+                case 'A':
+                    movePlayer('left');
+                    break;
+                case 'ArrowRight':
+                case 'd':
+                case 'D':
+                    movePlayer('right');
+                    break;
+                default:
+                    return; // Ignore other keys
+            }
+            event.preventDefault(); // Stop scrolling
+        }
+
+        /**
+         * Handles touch input from on-screen controls.
+         * @param {Event} event
+         */
+        function handleControlClick(event) {
+            const direction = event.currentTarget.getAttribute('data-move');
+            if (direction) {
+                movePlayer(direction);
+            }
+        }
+
+        /**
+         * Resizes the canvas to maintain aspect ratio and fit the container.
+         */
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            const size = Math.min(container.clientWidth, container.clientHeight);
+
+            // Set canvas size (always square)
+            canvas.width = size;
+            canvas.height = size;
+
+            // Redraw game content
+            if (maze.length > 0) {
+                drawGame();
+            }
+        }
+
+        // --- Initialization ---
+
+        window.onload = function () {
+            canvas = document.getElementById('mazeCanvas');
+            ctx = canvas.getContext('2d');
+
+            // Set up event listeners
+            document.addEventListener('keydown', handleKeydown);
+            document.getElementById('newGameBtn').addEventListener('click', createNewMaze);
+
+            // Add listeners for mobile D-pad buttons
+            document.querySelectorAll('.control-button').forEach(button => {
+                button.addEventListener('click', handleControlClick);
+            });
+
+            // Initial resize and maze generation
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            createNewMaze(); // Start the first game
+        };
+    </script>
+</body>
+</html>
