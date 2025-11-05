@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D&D Digital Dice Roller</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <!-- Load Tone.js for sound effects -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    <style>
+        /* Custom styles for the fantasy theme */
+        :root {
+            --primary-bg: #1f1d2b;
+            --card-bg: #2a283e;
+            --accent-color: #fca311; /* Amber/Gold */
+            --glow-color: #ffc361;
+            --border-color: #4c4a63;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--primary-bg);
+            background-image: linear-gradient(135deg, #1f1d2b 0%, #0d0d14 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            padding: 1rem;
+        }
+
+        .die-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+        }
+
+        .die-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.6), 0 0 10px var(--accent-color);
+        }
+
+        .roll-button {
+            background-color: var(--accent-color);
+            box-shadow: 0 5px 15px rgba(252, 163, 17, 0.5);
+            transition: all 0.15s ease-in-out;
+            color: #1f1d2b;
+        }
+
+        .roll-button:hover {
+            background-color: #ffb740;
+            box-shadow: 0 7px 20px rgba(252, 163, 17, 0.8);
+            transform: translateY(-2px);
+        }
+
+        .roll-button:active {
+            transform: translateY(0);
+            box-shadow: 0 4px 10px rgba(252, 163, 17, 0.4);
+        }
+
+        .input-number {
+            background-color: #1f1d2b;
+            border-color: var(--border-color);
+        }
+
+        /* Animation for the result display */
+        @keyframes roll-in {
+            0% { opacity: 0; transform: translateY(-10px) scale(0.8); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .result-item {
+            animation: roll-in 0.3s ease-out;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="app" class="w-full max-w-4xl p-6 md:p-10">
+        <header class="text-center mb-10">
+            <h1 class="text-5xl font-extrabold tracking-tight text-white mb-2">
+                The Gilded Dice
+            </h1>
+            <p class="text-xl font-medium text-gray-400">Roll for Initiative & Glory</p>
+        </header>
+
+        <!-- Dice Selection Grid -->
+        <div id="dice-selector" class="grid grid-cols-2 md:grid-cols-3 gap-6 mb-10">
+            <!-- Dice Card Template -->
+        </div>
+
+        <!-- Roll Button and Total Result -->
+        <div class="flex flex-col sm:flex-row items-center justify-between p-6 rounded-xl bg-gray-800/50 backdrop-blur-sm border border-gray-700/50 mb-10">
+            <div class="flex items-center space-x-4 mb-4 sm:mb-0">
+                <span class="text-4xl font-extrabold text-gray-200">Total:</span>
+                <span id="grand-total" class="text-5xl font-extrabold text-accent-color">0</span>
+            </div>
+            
+            <button onclick="executeRoll()" class="roll-button font-bold text-xl py-4 px-10 rounded-full w-full sm:w-auto uppercase shadow-lg hover:shadow-2xl">
+                Roll the Dice!
+            </button>
+        </div>
+        
+        <!-- Individual Results Area -->
+        <h2 class="text-2xl font-bold text-gray-300 mb-4">Individual Results</h2>
+        <div id="results-container" class="min-h-[100px] grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4 p-4 rounded-xl bg-gray-800/30 border border-gray-700/50">
+            <p id="roll-placeholder" class="col-span-full text-center text-gray-500 italic text-lg mt-4">
+                Enter quantities and click 'Roll the Dice!'
+            </p>
+        </div>
+
+        <!-- LLM Narrative Area -->
+        <div class="mt-10 p-6 rounded-xl bg-gray-900 border border-gray-700">
+            <h2 class="text-3xl font-extrabold text-white mb-4">
+                The Bard's Tale <span class="text-accent-color">✨</span>
+            </h2>
+            <div id="narrative-button-container" class="mb-4">
+                <!-- Button inserted here after a roll -->
+            </div>
+            <div id="narrative-output" class="p-4 rounded-lg bg-gray-800/50 min-h-[50px] text-gray-300 italic">
+                The Dungeon Master awaits the results of your roll before weaving the tale...
+            </div>
+            <div id="narrative-loading" class="hidden text-center text-accent-color font-semibold mt-4">
+                Weaving the yarn of fate...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables for the application
+        const diceTypes = [4, 6, 8, 10, 12, 20];
+        const diceSelector = document.getElementById('dice-selector');
+        const resultsContainer = document.getElementById('results-container');
+        const grandTotalDisplay = document.getElementById('grand-total');
+        
+        // LLM & State Variables
+        const narrativeOutput = document.getElementById('narrative-output');
+        const narrativeButtonContainer = document.getElementById('narrative-button-container');
+        const narrativeLoading = document.getElementById('narrative-loading');
+        
+        let lastTotalRoll = 0;
+        let lastRollDetails = "";
+
+        // LLM API configuration (standard template variables)
+        const apiKey = "";
+        const llmApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+        // --- Tone.js Sound Initialization ---
+        let metalSynth;
+
+        /**
+         * Initializes Tone.js components. Must be called after a user interaction.
+         */
+        async function initAudio() {
+            if (!metalSynth) {
+                await Tone.start(); 
+                
+                metalSynth = new Tone.PolySynth(Tone.MetalSynth, {
+                    volume: -10,
+                    envelope: {
+                        attack: 0.001,
+                        decay: 0.2,
+                        release: 0.05
+                    },
+                    harmonicity: 3.1, 
+                    modulationIndex: 32,
+                    resonance: 4000
+                }).toDestination();
+                console.log("Audio Context Started and Synth Initialized.");
+            }
+        }
+
+        /**
+         * Plays a percussive, clinking sound effect based on the die size.
+         * @param {number} sides - The number of sides on the die.
+         */
+        function playSound(sides) {
+            if (!metalSynth) return;
+
+            const baseFrequency = 200 + (sides * 15); // Base frequency slightly scales with sides
+
+            metalSynth.triggerAttackRelease(
+                baseFrequency + (Math.random() * 50), // Frequency (note) argument with some randomness
+                "8n" // Short duration
+            );
+        }
+        
+        /**
+         * Generic function to call the Gemini API with exponential backoff.
+         */
+        async function callGeminiApi(payload, maxRetries = 5) {
+            let delay = 1000;
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    const response = await fetch(llmApiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.status === 429 && attempt < maxRetries - 1) {
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        delay *= 2; 
+                        continue;
+                    }
+
+                    if (!response.ok) {
+                        throw new Error(`API call failed with status: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    // Extract text from the candidate structure
+                    const text = result.candidates?.[0]?.content?.parts?.[0]?.text || "Narrative generation failed: Empty response from LLM.";
+                    return text;
+
+                } catch (error) {
+                    console.error(`Attempt ${attempt + 1} failed:`, error);
+                    if (attempt === maxRetries - 1) {
+                        throw new Error("Gemini API call failed after multiple retries.");
+                    }
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay *= 2;
+                }
+            }
+        }
+
+        /**
+         * Generates a narrative using the Gemini API based on the dice roll results.
+         */
+        async function generateNarrative() {
+            if (lastTotalRoll === 0) return;
+
+            // Display loading state
+            narrativeOutput.innerHTML = `<p class="text-center italic text-gray-500">The Bard is consulting the Scroll of Fate...</p>`;
+            narrativeLoading.classList.remove('hidden');
+            
+            const systemPrompt = "You are a dramatic, high-fantasy Dungeon Master (DM). Your task is to interpret the provided dice roll total and the individual die rolls, and generate a concise, engaging narrative (3-4 sentences max) describing the epic success, dramatic failure, or significant outcome of a player's action. Use evocative, dramatic language (e.g., 'The air crackled...', 'A thunderous clang...', 'The shadows swallow...').";
+            
+            const userQuery = `The player rolled a total of ${lastTotalRoll}. The individual rolls were: ${lastRollDetails}. Describe the outcome of the action based on these results.`;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            try {
+                const generatedText = await callGeminiApi(payload);
+                // Replace newlines with <br> for HTML rendering
+                narrativeOutput.innerHTML = generatedText.replace(/\n/g, '<br>'); 
+            } catch (error) {
+                narrativeOutput.innerHTML = `<p class="text-red-400">Error fetching narrative: ${error.message}</p>`;
+            } finally {
+                // Hide loading state
+                narrativeLoading.classList.add('hidden');
+            }
+        }
+
+        // --- Core Application Logic ---
+
+        /**
+         * Generates the HTML card for a single die type with input field.
+         * @param {number} sides - The number of sides on the die (e.g., 20 for D20).
+         */
+        function renderDieCard(sides) {
+            const dieName = `D${sides}`;
+            const card = document.createElement('div');
+            card.className = 'die-card p-4 rounded-xl flex flex-col items-center space-y-3';
+            card.innerHTML = `
+                <div class="text-center">
+                    <div class="text-5xl font-black text-accent-color">${dieName}</div>
+                    <div class="text-sm text-gray-400">Sides</div>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <label for="qty-${dieName}" class="text-gray-300 font-medium">Quantity:</label>
+                    <input type="number" id="qty-${dieName}" value="0" min="0" max="99" 
+                           class="input-number text-center w-16 h-10 rounded-lg border-2 text-white font-bold text-lg focus:outline-none focus:ring-2 focus:ring-accent-color focus:border-accent-color transition duration-150">
+                </div>
+            `;
+            diceSelector.appendChild(card);
+        }
+
+        /**
+         * Simulates rolling a die with a given number of sides.
+         * @param {number} sides - The number of sides (N).
+         * @returns {number} The result of the roll (1 to N).
+         */
+        function rollDie(sides) {
+            return Math.floor(Math.random() * sides) + 1;
+        }
+
+        /**
+         * Updates the result display with a single roll value.
+         * @param {number} sides - The number of sides on the die.
+         * @param {number} result - The result of the roll.
+         */
+        function displayRollResult(sides, result) {
+            const resultItem = document.createElement('div');
+            const isCrit = (sides === 20 && result === 20);
+            const isFail = (sides === 20 && result === 1);
+            
+            let resultClass = 'text-white'; // Default color
+            let label = `D${sides}`;
+
+            if (isCrit) {
+                resultClass = 'text-green-400 font-extrabold text-2xl animate-pulse';
+                label = 'NAT 20!';
+            } else if (isFail) {
+                resultClass = 'text-red-500 font-extrabold text-2xl';
+            }
+
+            resultItem.className = 'result-item flex flex-col items-center justify-center p-2 rounded-lg bg-gray-700/50';
+            resultItem.innerHTML = `
+                <div class="text-xs text-gray-400 font-semibold">${label}</div>
+                <div class="text-3xl font-bold ${resultClass}">${result}</div>
+            `;
+            resultsContainer.appendChild(resultItem);
+        }
+
+        /**
+         * Executes the full dice roll based on selected quantities.
+         */
+        async function executeRoll() {
+            // Initialize audio context on the first user interaction
+            await initAudio(); 
+            
+            let grandTotal = 0;
+            let totalRolls = 0;
+            resultsContainer.innerHTML = ''; // Clear previous results
+            
+            let rollSummary = {}; // To store counts: {4: [5, 2], 20: [18]}
+
+            // Iterate over all die types
+            for (const sides of diceTypes) {
+                const dieName = `D${sides}`;
+                const inputElement = document.getElementById(`qty-${dieName}`);
+                
+                // Ensure the input element exists and is valid
+                if (!inputElement || isNaN(parseInt(inputElement.value))) {
+                    continue;
+                }
+
+                const quantity = parseInt(inputElement.value);
+
+                if (quantity > 0) {
+                    rollSummary[sides] = [];
+                    for (let i = 0; i < quantity; i++) {
+                        const result = rollDie(sides);
+                        grandTotal += result;
+                        totalRolls++;
+                        displayRollResult(sides, result);
+                        playSound(sides); 
+                        rollSummary[sides].push(result);
+                    }
+                }
+            }
+
+            // Prepare roll details for LLM
+            let detailsArray = [];
+            for (const sides of diceTypes) {
+                if (rollSummary[sides] && rollSummary[sides].length > 0) {
+                    detailsArray.push(`${rollSummary[sides].length}x D${sides} (Results: ${rollSummary[sides].join(', ')})`);
+                }
+            }
+            lastRollDetails = detailsArray.join('; ');
+            lastTotalRoll = grandTotal;
+
+            // Update grand total
+            grandTotalDisplay.textContent = grandTotal.toString();
+            
+            // Show placeholder if no rolls were made
+            if (totalRolls === 0) {
+                resultsContainer.innerHTML = `
+                    <p id="roll-placeholder" class="col-span-full text-center text-gray-500 italic text-lg mt-4">
+                        Please enter a quantity greater than zero for at least one die.
+                    </p>
+                `;
+                narrativeButtonContainer.innerHTML = '';
+                narrativeOutput.innerHTML = `The Dungeon Master awaits the results of your roll before weaving the tale...`;
+            } else {
+                // Add a final sum result visualization
+                 const sumCard = document.createElement('div');
+                 sumCard.className = 'result-item col-span-full flex flex-col items-center p-4 rounded-lg bg-accent-color/20 border border-accent-color mt-4';
+                 sumCard.innerHTML = `
+                     <div class="text-lg font-bold text-accent-color">Total Roll Sum:</div>
+                     <div class="text-5xl font-black text-accent-color">${grandTotal}</div>
+                 `;
+                 resultsContainer.appendChild(sumCard);
+
+                // Display Narrative Button
+                narrativeButtonContainer.innerHTML = `
+                    <button onclick="generateNarrative()" class="roll-button w-full font-bold text-lg py-3 px-6 rounded-lg uppercase shadow-lg">
+                        ✨ Narrate the Outcome
+                    </button>
+                `;
+                narrativeOutput.innerHTML = `The dice have spoken. Click the 'Narrate the Outcome' button to hear the Bard's Tale.`;
+            }
+        }
+
+        /**
+         * Initializes the dice roller application.
+         */
+        function init() {
+            // Render all die cards
+            diceTypes.forEach(renderDieCard);
+
+            // Set initial placeholder text in results
+            document.getElementById('roll-placeholder').textContent = "Enter quantities and click 'Roll the Dice!'";
+        }
+
+        // Initialize the app when the window loads
+        window.onload = init;
+    </script>
+</body>
+</html>
